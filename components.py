@@ -1,20 +1,14 @@
 import time
 import os
 import tkinter as tk
-from tkinter.filedialog import askdirectory
+import pandas as pd
+from logo2 import img2
+import base64
 
 
-__all__ = ["ClockTick", "CenterWindow", "SelectPath", "SetIcon", "ChildWindow"]
+__all__ = ["CenterWindow", "SetIcon", "ChildWindow"]
 
 
-# 时间显示
-def ClockTick():
-    global time1
-    time2 = time.strftime("%Y-%m-%d %H:%M:%S")
-    if time2 != time1:
-        time1 = time2
-        clock.config(text = time2)
-    clock.after(200, tick)
 
 # 窗口居中
 def CenterWindow(root, width, height):
@@ -22,11 +16,6 @@ def CenterWindow(root, width, height):
     screenheight = root.winfo_screenheight()
     size = "%dx%d+%d+%d" % (width, height, (screenwidth - width)/2, (screenheight - height)/2)
     root.geometry(size)
-
-# 路径选择 
-def SelectPath():
-    path_ = askdirectory()
-    path.set(path_)
 
 # 引入图标文件
 def SetIcon(root, img):
@@ -41,8 +30,8 @@ def ChildWindow():
     # 生成子窗口
     child_root = tk.Toplevel()
     child_root.title("运行记录")
-    # 这里打包时要引入logo1.img1的图标
-    # SetIcon(child_root, img1)
+    # 这里打包时要引入img2的图标
+    SetIcon(child_root, img2)
     child_root.geometry("330x160+300+300")
     S = tk.Scrollbar(child_root)
     T = tk.Text(child_root, height = 8, width = 240)
@@ -56,3 +45,4 @@ def ChildWindow():
         T.see(tk.END)
         T.update()
     return child_root, output
+

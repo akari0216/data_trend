@@ -1,10 +1,11 @@
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine, text
+from sql_querys import GET_COMPETE_DATA_SQL
 
 
 
-__all__ = ["get_compete_bo"]
+__all__ = ["GetCompeteData", "ProcessServiceFee"]
 
 """
 获取指定日期的竞对影院票房信息
@@ -18,7 +19,7 @@ Returns:
 
 """
 # 获取前一天的竞对票房，未模块化
-def get_compete_bo(date, database):
+def GetCompeteData(date, db_conn):
     df_compete_table = pd.DataFrame()
     field_list = {
         "cinema_code":"竞对影城编码", 
@@ -28,13 +29,9 @@ def get_compete_bo(date, database):
         "occupancy":"上座率", 
         "avg_price":"平均票价"
     }
-    sql_query  = text("""
-    SELECT cinema_code, cinema_name, movie_name, bo, people, occupancy 
-    FROM topcdb_compete_cinema_daily
-    WHERE op_date = :date
-    """)
-    df_compete = database.read_sql(
-        sql_query, 
+
+    df_compete = db_conn.sql_to_dataframe(
+        text(GET_COMPETE_DATA_SQL), 
         params = {"date": date}
     )
     
@@ -60,3 +57,64 @@ def get_compete_bo(date, database):
     
     return df_compete_table
 
+
+def ProcessServiceFee(data_file, serv_fee_dict):
+
+    columns = ["nationalId", "cinema_strName", "book_fee", "book_fee_jy", "fourD_serv_fee", "bedroom_serv_fee", \
+    "special_fee_online", "special_fee_offline", "check_fee_no", "check_fee_normal_no", "check_fee_online_no"]
+
+    df = pd.read_json(data_file, encoding = "utf-8-sig")
+    for each_col in ["book_fee", "book_fee_jy", "fourD_serv_fee", "bedroom_serv_fee", \
+    "special_fee_online", "special_fee_offline", "check_fee_no", "check_fee_normal_no", "check_fee_online_no"]:
+        df[each_col] = df[each_col].astype(float)
+
+    df["total_fee"] = df["book_fee"] + df["book_fee_jy"] + df["fourD_serv_fee"] + \
+    df["bedroom_serv_fee"] + df["special_fee_online"] + df["special_fee_offline"] + \
+    df["check_fee_online_no"]
+    # 日数据
+    if "showDate" in df.columns:
+        print("日服务费数据")
+        df = df[columns + ["showDate", "total_fee"]]
+        df.rename(columns = {"nationalId": "cinema_code", "cinema_strName": "cinema_name"}, inplace = True)
+        df["showDate"] = pd.to_datetime(df["showDate"], format = "%Y-%m-%d").dt.date
+        show_date_data = df[["showDate"]].groupby("showDate").count()
+        if len(show_date_data) == 1:
+            show_date = show_date_data.index[0]
+            df["year"] = show_date.year
+            df["month"] = show_date.month
+            df["op_date"] = show_date
+            df.drop(columns = ["showDate"], axis = 1, inplace = True)
+            df_serv_fee = df
+        else:
+            print("日服务费数据超过1天，请检查并重新下载！")
+
+    else:
+        df = df[columns + ["showMonth", "total_fee"]]
+        df.rename(columns = {"nationalId": "cinema_code", "cinema_strName": "cinema_name"}, inplace = True)
+        df["showMonth"] = pd.to_datetime(df["showMonth"], format = "%Y-%m-%d")
+        show_month_data = df[["showMonth"]].groupby("showMonth").count()
+        if len(show_month_data) == 1:
+            print("月服务费数据")
+            show_month = show_month_data.index[0]
+            df["year"] = show_month.year
+            df["month"] = show_month.month
+            df.drop(columns = ["showMonth"], axis = 1, inplace = True)
+            df_serv_fee = df
+        else:
+            print("年服务费数据")
+            df.rename(columns = {"nationalId": "cinema_code", "cinema_strName": "cinema_name"}, inplace = True)
+            table = pd.pivot_table(
+                df, 
+                index = ["cinema_code", "cinema_name"], 
+                values = ["book_fee", "book_fee_jy", "fourD_serv_fee", "bedroom_serv_fee", "special_fee_online", \
+                "special_fee_offline", "check_fee_no", "check_fee_normal_no", "check_fee_online_no", "total_fee"], 
+                aggfunc = np.sum, 
+                fill_value = 0, 
+                margins = False
+            )
+            table.reset_index(inplace = True)
+            table["year"] = show_month_data.index[0].year
+            df_serv_fee = table
+
+    # 保存在字典中，不通过return返回
+    serv_fee_dict["serv_fee"] = df_serv_fee

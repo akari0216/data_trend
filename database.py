@@ -65,7 +65,7 @@ class DataBase:
     def sql_to_dataframe(self, sql, params = None):
         data = None
         try:
-            if  self.engine is not None:
+            if self.engine is not None:
                 data = pd.read_sql(sql, self.engine, params = params)
             else:
                 data = pd.read_sql(sql, self.connect, params = params)
@@ -87,15 +87,16 @@ class DataBase:
 
     """
     def dataframe_to_table(self, dataframe, table, mode = "insert"):
+        today = datetime.date.today()
         cursor = self.connect.cursor()
-        columns = df.columns.tolist()
-        sql_to_delete = ""
+        columns = dataframe.columns.tolist()
         # 需要 将之前数据清除
         if mode == "update":
+            sql_to_delete = ""
             year = dataframe["year"][0]
             # 判断属于哪个日期的表
             if "op_date" in columns:
-                op_date, month = dataframe["op_date"][0], dataframe["month"][0]
+                op_date, month = dataframe["op_date"][0].dt.date, dataframe["month"][0]
                 sql_to_delete = "delete from %s where year = '%s' and month = '%s' and op_date = '%s'" % (table, year, month, op_date)
             else:
                 if "month" in columns:
@@ -104,17 +105,17 @@ class DataBase:
                 else:
                     sql_to_delete = "delete from %s where year = '%s'" % (table, year)
 
-        cursor.execute(sql_to_delete)
-        fileds = ",".join(columns) + ",update_time"
+            cursor.execute(sql_to_delete)
+
+        fields = ",".join(columns) + ",update_time"
         data = np.array(dataframe).tolist()
         for each_data in data:
-            string_data = str(each_data)[1:-1] + ",\'" + today + "\'"
+            string_data = str(each_data)[1:-1] + ",\'" + str(today) + "\'"
             sql_to_insert = "insert %s(%s) values (%s)" % (table, fields, string_data)
             cursor.execute(sql_to_insert)
 
         self.connect.commit()
         cursor.close()
-        self.connect.close()
     
     """
     关闭数据库连接。
@@ -131,13 +132,15 @@ class DataBase:
 
 
 class FTPData:
-    def __init__(self, host, user, passwd, port = 21, timeout = 30):
+    def __init__(self, host, user, passwd, port = 21, timeout = 30, date = datetime.date.today() - datetime.timedelta(days = 1)):
         self.host = host
         self.user = user
         self.passwd = passwd
         self.port = port
         self.timeout = timeout
         self.ftp = FTP()
+        self.date = date
+        self.dataframe = None
 
     """
     建立FTP连接并登录。
@@ -174,19 +177,19 @@ class FTPData:
         无。
 
     """
-    def fetch_data(self, date):
+    def fetch_data(self):
         lst = self.ftp.nlst()
-        target_file = "SessionRevenue_"+ date.replace("-", "") +".csv"
+        target_file = "SessionRevenue_"+ str(self.date).replace("-", "") +".csv"
         for each_file in lst:
             if re.match(target_file, each_file):
                 file_handle = open(target_file, "wb+")
-                self.ftp.retrbinary("RETR" + target_file, file_handle.write)
+                self.ftp.retrbinary("RETR " + target_file, file_handle.write)
                 file_handle.close()
 
         self.ftp.quit()
         dataframe = pd.read_csv(target_file)
         os.remove(target_file)
-        return dataframe
+        self.dataframe = dataframe
 
     """
     处理数据，返回包含所需信息的DataFrame
@@ -199,28 +202,21 @@ class FTPData:
         pd.DataFrame: 包含所需信息的DataFrame
 
     """
-    def process_data(self, dataframe):
-        date = datetime.date.today() - datetime.timedelta(days = 1)
-        dataframe["场次时间"] = pd.to_datetime(dataframe["场次时间"])
-        dataframe["date"] = pd.to_datetime(datetime.datetime(date.year, date.month, date.day, 6))
-        dataframe["day_diff"] = (dataframe["场次时间"] - dataframe["date"]).dt.days
-        dataframe = dataframe[dataframe["day_diff"].isin([0])]
-        dataframe = dataframe[dataframe["场次状态"].isin(["开启"])]
-        dataframe["影片"].replace("（.*?）\s*|\(.*?\)\s*|\s*", "", regex = True, inplace = True)
+    def process_data(self, db_conn):
+        self.dataframe["场次时间"] = pd.to_datetime(self.dataframe["场次时间"])
+        self.dataframe["date"] = pd.to_datetime(datetime.datetime(self.date.year, self.date.month, self.date.day, 6))
+        self.dataframe["day_diff"] = (self.dataframe["场次时间"] - self.dataframe["date"]).dt.days
+        self.dataframe = self.dataframe[self.dataframe["day_diff"].isin([0])]
+        self.dataframe = self.dataframe[self.dataframe["场次状态"].isin(["开启"])]
+        self.dataframe["影片"].replace("（.*?）\s*|\(.*?\)\s*|\s*", "", regex = True, inplace = True)
         
-        database = DataBase(
-            host = "localhost", 
-            user = "root", 
-            passwd = "jy123456", 
-            db = "jycinema_data", 
-        )
-        database.build_connect()
-        dataframe_cinema_code = database.sql_to_dataframe(
+        db_conn.build_connect()
+        dataframe_cinema_code = db_conn.sql_to_dataframe(
             sql = "select vista_cinema_name,cinema_code from jycinema_info"
         )
 
         table = pd.pivot_table(
-            dataframe, 
+            self.dataframe, 
             index = ["影院"], 
             values = ["票房","人数","总座位数"], 
             aggfunc = {"票房":np.sum,"人数":np.sum,"总座位数":np.sum}, 
@@ -234,15 +230,19 @@ class FTPData:
             left = table, 
             right = dataframe_cinema_code, 
             left_on = "影院", 
-            right_on = "vista_cinema_code", 
+            right_on = "vista_cinema_name", 
             how = "left"
         )
         table.rename(columns = {"cinema_code":"影城编码", "影院":"影院名称", "人数":"人次"}, inplace = True)
         table.drop(columns = ["总座位数", "vista_cinema_name"], axis = 1, inplace = True)
         table = table.reindex(columns = ["影城编码", "影院名称", "票房", "人次", "上座率", "平均票价"])
-        none_code_cinema = table[table["影城编码".isnull()]]["影院名称"].tolist()
+        none_code_cinema = table[table["影城编码"].isnull()]["影院名称"].tolist()
         if len(none_code_cinema) > 0:
             print("以下影城未匹配到编码，请重新检查\n")
             print(",".join(none_code_cinema))
 
-        return table
+        self.dataframe = table
+        db_conn.close_connect()
+
+    def save_dataframe(self):
+        return self.dataframe

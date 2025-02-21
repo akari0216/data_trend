@@ -5,6 +5,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from email.utils import formataddr
+import time, random
 
 
 class MailSender:
@@ -64,37 +65,43 @@ class MailSender:
         None
 
     """
-    def send_mail(self, entity_list, files_dict, child_window_func, path, receiver_mail_addr):
+    def send_mail(self, path, entity_list, files_dict, receiver_mail_addr_dict, output):
         # entity_list: [cinema1, cinema2, ..., cinema_n] or [city1, city2, ..., city_n]
         # files_dict :  dict(key: [val1, val2, ..., valn]) -> cinema_name:[cinema_xlsx] or city:[cinema1_xlsx, cinema2_xlsx, ..., cinema_n_xlsx, city_xlsx]
-        # receiver_mail_addr: dict(entity1:mail_addr1, entity2:mail_addr2, ..., entity_n:mail_addr_n)
-        child_root, output = child_window_func()
+        # receiver_mail_addr_dict: dict(entity1:mail_addr1, entity2:mail_addr2, ..., entity_n:mail_addr_n)
         os.chdir(path)
         suc_cnt, fail_cnt = 0, 0
         for each_entity in entity_list:
-            msg = MIMEMultipart()
-            # 同城文件放最尾
-            topic = files_dict[each_entity][-1].rstrip(".xlsx")
-            each_receiver = receiver_mail_addr[each_entity]
-            msg["Subject"], text = topic, MIMEText(topic)
-            msg["From"], msg["To"] = formataddr(["信息数据分析研究中心", self.sender]), each_receiver
-            msg.attach(text)
-            for each_file in files_dict[each_entity]:
-                att = MIMEApplication(open(each_file, "rb").read())
-                att.add_header("Content-Disposition", "attachment", filename=("GBK", "", each_file))
-                msg.attach(att)
-            try:
-                if "," in each_receiver:
-                    self.smtp.sendmail(self.sender, each_receiver.split(","), msg.as_string())
-                else:
-                    self.smtp.sendmail(self.sender, each_receiver, msg.as_string())
-                output("%s send mail success\n" % each_entity)
-                suc_cnt += 1
-            except SMTPException as e:
-                fail_cnt += 1
-                output("%s send mail failed\n" % each_entity)
-        output("total mail send success: %s, total mail send failed: %s" % (suc_cnt, fail_cnt))
-        child_root.mainloop()
+            if each_entity in files_dict.keys():
+                msg = MIMEMultipart()
+                # 同城文件放最尾
+                topic = files_dict[each_entity][-1].rstrip(".xlsx")
+                describes = """
+                （1）票房数据含服务费，票房取自实时报表，服务费取自vista系统。\n
+                （2）卖品数据取自infowork，按交易时间统计，含第三方预售部分，且含卖品销售折扣（含抖音套餐）。
+                """
+                each_receiver = receiver_mail_addr_dict[each_entity]
+                msg["Subject"], text = topic, MIMEText(topic + "\n" + describes)
+                msg["From"], msg["To"] = formataddr(["信息数据分析研究中心", self.sender]), each_receiver
+                msg.attach(text)
+                for each_file in files_dict[each_entity]:
+                    att = MIMEApplication(open(each_file, "rb").read())
+                    att.add_header("Content-Disposition", "attachment", filename=("GBK", "", each_file))
+                    msg.attach(att)
+                try:
+                    if "," in each_receiver:
+                        self.smtp.sendmail(self.sender, each_receiver.split(","), msg.as_string())
+                    else:
+                        self.smtp.sendmail(self.sender, each_receiver, msg.as_string())
+                    output("%s 发送成功!\n" % each_entity)
+                    suc_cnt += 1
+                except SMTPException as e:
+                    fail_cnt += 1
+                    output("%s 发送失败！\n" % each_entity)
+
+                time.sleep(random.randint(1, 2))
+
+        output("发送成功邮件数: %s, 发送失败邮件数: %s\n" % (suc_cnt, fail_cnt))
 
     """
     关闭与SMTP服务器的连接
